@@ -69,6 +69,13 @@ class QuantitativePipeline:
 
     def run_backtest(self):
         clean_data = self.data.dropna().copy()
+        
+        # --- DEFENSIVE CHECK: Prevent out-of-bounds error ---
+        if clean_data.empty:
+            # If data is empty, return zeros to prevent crashes
+            return 0.0, 0.0, 0.0, 0.0, 0.0, clean_data
+        # ----------------------------------------------------
+
         clean_data['Trade_Occurred'] = clean_data['Position'].diff().abs()
         clean_data['Strategy_Return'] = (clean_data['Position'] * clean_data['Returns']) - (clean_data['Trade_Occurred'] * self.slippage_rate)
         
@@ -80,9 +87,19 @@ class QuantitativePipeline:
         
         total_mkt_ret = clean_data['Market_Equity'].iloc[-1] - 1
         total_strat_ret = clean_data['Strategy_Equity'].iloc[-1] - 1
-        sharpe = (clean_data['Strategy_Return'].mean() / clean_data['Strategy_Return'].std()) * np.sqrt(252)
+        
+        # Check standard deviation to prevent division by zero
+        strat_std = clean_data['Strategy_Return'].std()
+        if strat_std == 0 or pd.isna(strat_std):
+            sharpe = 0.0
+        else:
+            sharpe = (clean_data['Strategy_Return'].mean() / strat_std) * np.sqrt(252)
+            
         max_dd = clean_data['Drawdown'].min()
-        win_rate = len(clean_data[clean_data['Strategy_Return'] > 0]) / len(clean_data[clean_data['Strategy_Return'] != 0])
+        
+        # Safely calculate win rate
+        total_trades = len(clean_data[clean_data['Strategy_Return'] != 0])
+        win_rate = len(clean_data[clean_data['Strategy_Return'] > 0]) / total_trades if total_trades > 0 else 0.0
 
         return total_mkt_ret, total_strat_ret, sharpe, max_dd, win_rate, clean_data
 
@@ -121,27 +138,32 @@ if st.sidebar.button("Execute Backtest", type="primary"):
         pipeline.generate_signals()
         mkt_ret, strat_ret, sharpe, max_dd, win_rate, final_data = pipeline.run_backtest()
         
-        st.subheader("📈 Performance & Risk Metrics")
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Strategy Return", f"{strat_ret:.2%}", f"{(strat_ret - mkt_ret):.2%} vs Market")
-        col2.metric("Sharpe Ratio", f"{sharpe:.2f}", "Risk-Adjusted")
-        col3.metric("Max Drawdown", f"{max_dd:.2%}", "Worst Case Loss", delta_color="inverse")
-        col4.metric("Trade Win Rate", f"{win_rate:.1%}")
+        # --- DEFENSIVE UI CHECK ---
+        if final_data.empty:
+            st.error("⚠️ Error: Insufficient data. This usually happens if Yahoo Finance rate-limits the connection, or if your Moving Average window is longer than your date range. Try widening the Date Range.")
+        else:
+            st.subheader("📈 Performance & Risk Metrics")
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Strategy Return", f"{strat_ret:.2%}", f"{(strat_ret - mkt_ret):.2%} vs Market")
+            col2.metric("Sharpe Ratio", f"{sharpe:.2f}", "Risk-Adjusted")
+            col3.metric("Max Drawdown", f"{max_dd:.2%}", "Worst Case Loss", delta_color="inverse")
+            col4.metric("Trade Win Rate", f"{win_rate:.1%}")
 
-        st.subheader("Equity Curve (Strategy vs. Buy & Hold)")
-        fig = go.Figure()
-        # Cleaned up chart colors for the dark grey theme
-        fig.add_trace(go.Scatter(x=final_data.index, y=final_data['Strategy_Equity'], mode='lines', name='Strategy Equity', line=dict(color='#00e676', width=2)))
-        fig.add_trace(go.Scatter(x=final_data.index, y=final_data['Market_Equity'], mode='lines', name='Market Equity (SPY)', line=dict(color='#888888', width=2, dash='dot')))
-        
-        # Transparent chart background so the dark grey shows through
-        fig.update_layout(
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)',
-            hovermode="x unified", 
-            margin=dict(l=0, r=0, t=30, b=0),
-            font=dict(color='#e0e0e0'),
-            xaxis=dict(gridcolor='#444444'),
-            yaxis=dict(gridcolor='#444444')
-        )
-        st.plotly_chart(fig, use_container_width=True)
+            st.subheader("Equity Curve (Strategy vs. Buy & Hold)")
+            fig = go.Figure()
+            # Cleaned up chart colors for the dark grey theme
+            fig.add_trace(go.Scatter(x=final_data.index, y=final_data['Strategy_Equity'], mode='lines', name='Strategy Equity', line=dict(color='#00e676', width=2)))
+            fig.add_trace(go.Scatter(x=final_data.index, y=final_data['Market_Equity'], mode='lines', name='Market Equity (SPY)', line=dict(color='#888888', width=2, dash='dot')))
+            
+            # Transparent chart background so the dark grey shows through
+            fig.update_layout(
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                hovermode="x unified", 
+                margin=dict(l=0, r=0, t=30, b=0),
+                font=dict(color='#e0e0e0'),
+                xaxis=dict(gridcolor='#444444'),
+                yaxis=dict(gridcolor='#444444')
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            
